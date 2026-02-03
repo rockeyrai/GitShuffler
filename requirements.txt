@@ -1,0 +1,4 @@
+# Standard library dependencies are not listed here.
+# Only external dependencies.
+# Explicitly listing what we might need if we expand, 
+# but for now, we are sticking to stdlib argparse as per constraints + standard setup.
