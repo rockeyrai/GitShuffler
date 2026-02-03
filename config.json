@@ -1,0 +1,28 @@
+{
+  "repo_url": "https://github.com/your-username/your-new-repo.git",
+  "start_date_hours_ago": 24,
+  "commit_interval_min": 5,
+  "commit_interval_max": 20,
+  "team": [
+    {
+      "name": "Dev Alpha",
+      "email": "alpha@example.com"
+    },
+    {
+      "name": "Dev Beta",
+      "email": "beta@example.com"
+    },
+    {
+      "name": "Dev Gamma",
+      "email": "gamma@example.com"
+    }
+  ],
+  "commit_messages": [
+    "Refactor core modules",
+    "Implement initial logic",
+    "Optimize performance",
+    "Update documentation",
+    "Fix minor bugs",
+    "Enhance UI components"
+  ]
+}
