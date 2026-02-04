@@ -12,27 +12,24 @@ class AuthorDTO:
 @dataclass
 class ConfigDTO:
     repo_path: str
-    # Legacy/Default single author fields (kept for backward compatibility/fallback)
-    author_name: str
-    author_email: str
-    
-    days_active: int
-    commits_per_day_min: int
-    commits_per_day_max: int
-    start_date: str
+    duration_str: str  # e.g. "2h", "5d"
     file_patterns: List[str]
     
-    # New multi-author fields
-    authors: List[AuthorDTO]
+    # Optional V2 fields
+    total_commits: Optional[int] = None
+    mode: str = "even" # "even" or "random"
     
-    # New Time Model
-    duration_seconds: float = 0.0 # Calculated from days_active or duration string
+    # Authors
+    authors: List[AuthorDTO] = None
+    
+    # Internal calculated
+    duration_seconds: float = 0.0
 
 class ConfigParser:
     @staticmethod
     def parse(config_path: str) -> ConfigDTO:
         """
-        Parses the JSON configuration file and returns a ConfigDTO object.
+        Parses the JSON configuration file (V2 Schema).
         Raises ValueError if the config is invalid.
         """
         if not os.path.exists(config_path):
@@ -44,53 +41,34 @@ class ConfigParser:
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in configuration file: {e}")
 
-        # Required fields for backward compatibility
-        # We now accept EITHER days_active OR duration (or both, duration wins)
-        # But for strictly required, we check existence specially below.
-        required_fields = [
-            "repo_path", 
-            "commits_per_day_min", "commits_per_day_max",
-            "start_date", "file_patterns"
-        ]
-
+        # Required fields V2
+        required_fields = ["repo_path", "duration", "file_patterns"]
         for field in required_fields:
             if field not in data:
-                raise ValueError(f"Missing required field in config: {field}")
+                 # Check for legacy fields to give helpful error
+                 if field == "duration" and "days_active" in data:
+                      raise ValueError("Config outdated: 'days_active' is deprecated. Please use 'duration' (e.g. \"5d\").")
+                 raise ValueError(f"Missing required field in config: {field}")
 
-        # Time Configuration Logic
+        # Duration Parsing
         from gitshuffler.utils.time_utils import TimeUtils
-        
-        duration_seconds = 0.0
-        
-        if "duration" in data:
-             try:
-                 td = TimeUtils.parse_duration(data["duration"])
-                 duration_seconds = td.total_seconds()
-             except ValueError as e:
-                 raise ValueError(f"Invalid 'duration' in config: {e}")
-        elif "days_active" in data:
-             if data["days_active"] < 1:
-                 raise ValueError("days_active must be at least 1")
-             # Convert days to seconds: days * 24 * 3600
-             # Note: The old Planner simulated 9am-6pm. We should respect that implicit expectation 
-             # if using days? Or just treat it as raw time?
-             # To be safe and precise: days_active usually meant "Total span in days".
-             # Let's convert to seconds directly.
-             duration_seconds = data["days_active"] * 86400
-        else:
-             raise ValueError("Must provide either 'duration' or 'days_active' in config.")
+        try:
+             td = TimeUtils.parse_duration(data["duration"])
+             duration_seconds = td.total_seconds()
+             if duration_seconds <= 0:
+                  raise ValueError("Duration must be positive.")
+        except ValueError as e:
+             raise ValueError(f"Invalid 'duration': {e}")
 
-        # Basic Validation
-        if data["commits_per_day_min"] < 0:
-            raise ValueError("commits_per_day_min must be non-negative")
-        if data["commits_per_day_max"] < data["commits_per_day_min"]:
-            raise ValueError("commits_per_day_max must be greater than or equal to commits_per_day_min")
+        # Total Commits
+        total_commits = data.get("total_commits")
+        if total_commits is not None:
+             if not isinstance(total_commits, int) or total_commits < 1:
+                  raise ValueError("total_commits must be a positive integer.")
 
-        # Handle Author Configuration
-        authors: List[AuthorDTO] = []
-        default_author_name = data.get("author_name")
-        default_author_email = data.get("author_email")
-
+        # Authors
+        authors: List[ConfigParser.AuthorDTO] = []
+        # Support V2 authors list primarily
         if "authors" in data and data["authors"]:
             raw_authors = data["authors"]
             total_weight = 0.0
@@ -101,30 +79,34 @@ class ConfigParser:
                 total_weight += weight
                 authors.append(AuthorDTO(name=a["name"], email=a["email"], weight=weight))
             
-            if not (0.99 <= total_weight <= 1.01):
-                 raise ValueError(f"Author weights must sum to 1.0 (got {total_weight})")
-        
+            if raw_authors and any("weight" in a for a in raw_authors):
+                 if not (0.99 <= total_weight <= 1.01):
+                      raise ValueError(f"Author weights must sum to 1.0 (got {total_weight})")
         else:
-            if not default_author_name or not default_author_email:
-                if "default_author" in data:
-                    default = data["default_author"]
-                    default_author_name = default.get("name")
-                    default_author_email = default.get("email")
-
-            if not default_author_name or not default_author_email:
-                 raise ValueError("Must provide either 'authors' list or 'author_name'/'author_email'")
-            
-            authors.append(AuthorDTO(name=default_author_name, email=default_author_email, weight=1.0))
+             # Legacy fallback support for author_name/email -> converted to list
+             name = data.get("author_name")
+             email = data.get("author_email")
+             
+             if not name or not email:
+                  # Check 'default_author' object fallback
+                  default = data.get("default_author", {})
+                  name = default.get("name")
+                  email = default.get("email")
+             
+             if not name or not email:
+                  raise ValueError("Must provide 'authors' list OR 'author_name'/'author_email'.")
+             
+             authors.append(AuthorDTO(name=name, email=email, weight=1.0))
 
         return ConfigDTO(
             repo_path=data["repo_path"],
-            author_name=default_author_name if default_author_name else authors[0].name,
-            author_email=default_author_email if default_author_email else authors[0].email,
-            days_active=data.get("days_active", int(duration_seconds // 86400)), # fallback for legacy read
-            commits_per_day_min=data["commits_per_day_min"],
-            commits_per_day_max=data["commits_per_day_max"],
-            start_date=data["start_date"],
-            file_patterns=data.get("file_patterns", []),
+            duration_str=data["duration"],
+            file_patterns=data["file_patterns"],
+            total_commits=total_commits,
+            mode=data.get("mode", "even"),
             authors=authors,
             duration_seconds=duration_seconds
         )
+    
+    # Exposing AuthorDTO for type hinting externally if needed, or relying on module level
+    AuthorDTO = AuthorDTO
