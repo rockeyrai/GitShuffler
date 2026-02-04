@@ -79,26 +79,85 @@ class Engine:
     def scan_files(self) -> List[str]:
         """
         Scans the repository for files matching the patterns.
+        Strictly enforces safety by avoiding dangerous directories (node_modules)
+        and skipping symbolic links.
         """
         if not self.config:
             raise RuntimeError("Config not loaded. Call load_config() first.")
+        
+        # Hard-coded safety excludes (directories to NEVER traverse)
+        HARD_EXCLUDES = {
+            'node_modules', '.git', 'dist', 'build', '.next', 'vendor', 
+            '__pycache__', '.venv', 'env', 'venv'
+        }
         
         all_files = set()
         
         original_cwd = os.getcwd()
         try:
-            # Move to repo path to run glob relative to it
-            # Or we can construct absolute paths.
-            # Let's ensure we work with paths relative to repo_path
             os.chdir(self.config.repo_path)
             
-            for pattern in self.config.file_patterns:
-                # recursive glob if pattern contains **
-                matches = glob.glob(pattern, recursive=True)
-                for m in matches:
-                    if os.path.isfile(m):
-                        # Normalize path
-                        all_files.add(os.path.normpath(m))
+            # We use os.walk instead of glob to control traversal
+            for root, dirs, files in os.walk(".", topdown=True):
+                # 1. Prune dangerous directories in-place so we don't even enter them
+                # This is critical for performance and safety (avoids deep node_modules scan)
+                dirs[:] = [d for d in dirs if d not in HARD_EXCLUDES and not d.startswith('.')]
+                
+                # Check for symlink directories (os.walk doesn't follow by default, but let's be safe)
+                # If we were following links, we'd need to check here. 
+                # Since followlinks=False (default), root is safe unless it's a link itself (top level).
+                
+                for filename in files:
+                    filepath = os.path.join(root, filename)
+                    
+                    # 2. Strict Symlink Check
+                    if os.path.islink(filepath):
+                        continue
+                        
+                    # 3. Match against patterns
+                    # Glob matching is tricky with os.walk. 
+                    # We can use fnmatch or internal glob logic.
+                    # Since config.file_patterns are globs like "**/*.py", we need to check if filepath matches.
+                    # Simplest way: Check extension if pattern is simple, or match against normalized path?
+                    
+                    # Actually, simple globs:
+                    # To support full glob power (like src/**/*.py), we might need to filter AFTER.
+                    # BUT we want to avoid scanning node_modules.
+                    # So: We walk EVERYTHING (that isn't excluded), then filter by pattern.
+                    
+                    norm_path = os.path.normpath(filepath)
+                    if norm_path.startswith("./"):
+                        norm_path = norm_path[2:]
+                        
+                    # Optimally, we check matches. 
+                    # For V1 compatibility, we used glob.glob(pattern).
+                    # Now we have candidate files, we see if they match ANY pattern.
+                    # This is slightly expensive O(N*P).
+                    # Let's use fnmatch.
+                    import fnmatch
+                    
+                    matched = False
+                    for pattern in self.config.file_patterns:
+                        # fnmatch doesn't handle ** properly.
+                        # Convert "**/*.py" -> "*.py" for simple extension matching
+                        # Or convert "**" to "*" for broader matching
+                        
+                        # Strategy: If pattern starts with "**/" or is "**", we match recursively.
+                        # fnmatch("foo/bar.py", "*.py") = False
+                        # fnmatch("foo/bar.py", "*/*.py") = True
+                        # fnmatch("bar.py", "*.py") = True
+                        
+                        # Best approach: Replace all "**" with "*" since we already walk all dirs.
+                        # Then fnmatch should work for most cases.
+                        fnmatch_pattern = pattern.replace("**/", "").replace("**", "*")
+                        
+                        if fnmatch.fnmatch(norm_path, fnmatch_pattern) or fnmatch.fnmatch(filename, fnmatch_pattern):
+                             matched = True
+                             break
+                    
+                    if matched:
+                         all_files.add(norm_path)
+
         finally:
             os.chdir(original_cwd)
             
