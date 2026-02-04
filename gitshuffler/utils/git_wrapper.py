@@ -133,3 +133,18 @@ class GitWrapper:
     def is_detached(self) -> bool:
         """Returns True if HEAD is detached."""
         return self.current_branch() == "HEAD"
+
+    def get_head_hash(self) -> str:
+        """Returns the full SHA-1 hash of HEAD."""
+        try:
+            return self.run_command(["rev-parse", "HEAD"])
+        except RuntimeError:
+            return ""
+
+    def check_gpg_sign(self) -> bool:
+        """Checks if commit signing is enabled in config."""
+        try:
+            val = self.run_command(["config", "--get", "commit.gpgsign"])
+            return val.lower() == "true"
+        except RuntimeError:
+            return False

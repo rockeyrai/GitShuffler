@@ -14,6 +14,7 @@ class ExecutionState:
     total_commits: int
     is_complete: bool
     manifest_data: List[dict] # Serialized manifest
+    last_commit_hash: str = "" # SHA-1 of the last applied commit
 
 class StateManager:
     def __init__(self, state_file: str = STATE_FILE):
@@ -100,7 +101,8 @@ class StateManager:
                 last_applied_index=-1,
                 total_commits=len(manifest),
                 is_complete=False,
-                manifest_data=self._serialize_manifest(manifest)
+                manifest_data=self._serialize_manifest(manifest),
+                last_commit_hash=""
             ))
             return 0
 
@@ -118,16 +120,14 @@ class StateManager:
         print(f"Resuming execution from commit {saved_state.last_applied_index + 2}/{len(manifest)}...")
         return saved_state.last_applied_index + 1
 
-    def update_progress(self, index: int, is_complete: bool = False):
-        """Updates the state with the last successfully applied commit index."""
-        # We need to preserve the hash and other info. 
-        # Ideally we kept the state object in memory, but stateless load/save is robust too.
+    def update_progress(self, index: int, last_hash: str, is_complete: bool = False):
+        """Updates the state with the last successfully applied commit index and hash."""
         saved_state = self.load_state()
         if not saved_state:
-             # Should not happen if initialized properly
              return
         
         saved_state.last_applied_index = index
+        saved_state.last_commit_hash = last_hash
         saved_state.is_complete = is_complete
         self.save_state(saved_state)
 

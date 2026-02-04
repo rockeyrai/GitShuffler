@@ -43,6 +43,69 @@ class Engine:
             
         return sorted(list(all_files))
 
+    def _validate_paths(self, files: List[str]):
+        """
+        Validates file paths for cross-platform safety.
+        Checks for MAX_PATH limits and case conflict collisions.
+        """
+        # 1. MAX_PATH check (Windows usually 260, but let's be safe with 250)
+        # We check the absolute path length or relative? Git usually cares about full path if checkout fail, 
+        # but here we care if we can stage it.
+        # Let's check relative path length < 260 for safety.
+        
+        long_paths = [f for f in files if len(f) > 250]
+        if long_paths:
+             print(f"Warning: {len(long_paths)} files have paths longer than 250 chars. This may cause issues on Windows.")
+             for f in long_paths[:3]:
+                 print(f"  - {f}")
+        
+        # 2. Case Collision Detection
+        # Maps lower_case -> original_path
+        seen = {}
+        collisions = []
+        for f in files:
+            lower = f.lower()
+            if lower in seen:
+                collisions.append((seen[lower], f))
+            else:
+                seen[lower] = f
+        
+        if collisions:
+            print(f"Warning: Detected {len(collisions)} case-insensitive path collisions.")
+            print("This may cause unsafe behavior on cross-platform transfers.")
+            for org, new in collisions[:3]:
+                print(f"  - '{org}' vs '{new}'")
+
+    def scan_files(self) -> List[str]:
+        """
+        Scans the repository for files matching the patterns.
+        """
+        if not self.config:
+            raise RuntimeError("Config not loaded. Call load_config() first.")
+        
+        all_files = set()
+        
+        original_cwd = os.getcwd()
+        try:
+            # Move to repo path to run glob relative to it
+            # Or we can construct absolute paths.
+            # Let's ensure we work with paths relative to repo_path
+            os.chdir(self.config.repo_path)
+            
+            for pattern in self.config.file_patterns:
+                # recursive glob if pattern contains **
+                matches = glob.glob(pattern, recursive=True)
+                for m in matches:
+                    if os.path.isfile(m):
+                        # Normalize path
+                        all_files.add(os.path.normpath(m))
+        finally:
+            os.chdir(original_cwd)
+            
+        file_list = sorted(list(all_files))
+        self._validate_paths(file_list)
+        return file_list
+
     def plan(self) -> List[CommitAction]:
         """
         Runs the planning phase.
@@ -78,6 +141,11 @@ class Engine:
             return
 
         self.git.verify_installed()
+        
+        # GPG Check
+        if self.git.check_gpg_sign():
+             print("Warning: GPG signing is enabled (commit.gpgsign=true).")
+             print("If your key requires a passphrase, this process may hang or fail non-interactively.")
         
         # We assume the user wants to init if not already a repo?
         # Or maybe we should check. The requirements said "scans files from a repository".
@@ -131,6 +199,18 @@ class Engine:
             # Resume logic
             try:
                  start_index = state_manager.initialize_or_resume(manifest)
+                 
+                 # Resume Integrity Check
+                 saved_state = state_manager.load_state()
+                 if saved_state and saved_state.last_commit_hash:
+                     current_head = self.git.get_head_hash()
+                     if current_head and current_head != saved_state.last_commit_hash:
+                         print("CRITICAL ERROR: Repository State Mismatch!")
+                         print(f"Saved state expects HEAD at: {saved_state.last_commit_hash}")
+                         print(f"Current repository HEAD is at: {current_head}")
+                         print("The repository history has diverged (rewind, rebase, or external commits detected).")
+                         print("Cannot safely resume. Please delete .gitshuffler_state.json to force a fresh run.")
+                         return
             except RuntimeError as e:
                  # Hash mismatch
                  print(f"Error: {e}")
@@ -139,6 +219,11 @@ class Engine:
             if start_index >= len(manifest):
                  print("Plan already completed according to state.")
                  return
+
+            if dry_run:
+                print("\n=== DRY RUN / SIMULATED MODE ===")
+                print("No changes will be written to disk.")
+                print("================================\n")
 
             print(f"Applying {len(manifest) - start_index} (total {len(manifest)}) commits...")
             
@@ -168,7 +253,8 @@ class Engine:
                 
                 # 3. Update State (only if real execution)
                 if not dry_run:
-                     state_manager.update_progress(i, is_complete=(i == len(manifest) - 1))
+                     head_hash = self.git.get_head_hash()
+                     state_manager.update_progress(i, head_hash, is_complete=(i == len(manifest) - 1))
                 
             print("Done.")
 
