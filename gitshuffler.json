@@ -1,0 +1,9 @@
+{
+    "repo_path": "../../portfolio_v6",
+    "author_name": "rockeyrai",
+    "author_email": "rockeyrai234@gmail.com",
+    "duration": "20m",
+    "total_commits": 14,
+    "mode": "even",
+    "file_patterns": ["**/*.py", "**/*.md", "**/*.txt"]
+}
