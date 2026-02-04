@@ -20,11 +20,11 @@
 
 ## 🚀 Key Features
 
+- **🛡️ Safe-Scan Mode**: Automatically hard-excludes dangerous directories (`node_modules`, `.git`, `dist`, etc.) and strictly ignores all symbolic links. No more "pathspec beyond symlink" errors.
 - **🛡️ Crash-Safe Resume**: Interrupted sessions (e.g., system crash, Ctrl+C) can be resumed exactly where they left off using persistent state tracking.
-- **🕒 Human-Readable Scheduling**: Define history spans using natural language like `"2h 30m"` or `"15d"`.
+- **🕒 Relative Scheduling**: Define history spans using natural language like `"2h 30m"` or `"15d"`. Commits are distributed starting from **now** backwards or forwards in time relative to execution.
 - **👥 Multi-Author Simulation**: Shuffle commits across multiple developer identities with weighted probability.
-- **⚡ High-Performance Batching**: Efficiently handles repositories with 100,000+ files using batched Git operations.
-- **🔒 Production Hardening**: Feature-set includes Atomic state writes, PID locking, and automated pre-flight safety checks (HEAD integrity, dirty-repo detection).
+- **⚡ High-Performance Batching**: Efficiently handles repositories with 100,000+ files by skipping heavy dependencies and using optimized traversal.
 
 ---
 
@@ -76,38 +76,39 @@ The `gitshuffler.json` file is the brain of the operation. Below are the support
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `repo_path` | `string` | Absolute or relative path to the target Git repository. |
-| `start_date` | `string` | The point in time to begin history (Format: `YYYY-MM-DD`). |
-| `duration` | `string` | The length of the history window (e.g., `"2d"`, `"5h"`, `"30m"`). **Supersedes `days_active`.** |
-| `days_active` | `int` | Legacy field for duration in days. |
-| `commits_per_day_min` | `int` | Minimum commits to generate per 24h window. |
-| `commits_per_day_max` | `int` | Maximum commits to generate per 24h window. |
-| `file_patterns` | `list` | Glob patterns to include in shuffling (e.g., `["**/*.py", "docs/*.md"]`). |
+| `duration` | `string` | The length of the history window (e.g., `"2d"`, `"5h"`, `"30m"`). Relative to execution time. |
+| `total_commits`| `int` | (Optional) Explicit number of commits to generate. If omitted, it's calculated based on file count. |
+| `mode` | `string` | (Optional) `"even"` (default) for uniform distribution or `"random"` for a bursty distribution. |
+| `file_patterns` | `list` | Glob patterns to include in shuffling (e.g., `["**/*.py", "src/**/*.md"]`). |
 | `authors` | `list` | List of author objects `{"name": "...", "email": "...", "weight": 0.5}`. |
 | `author_name` | `string` | Fallback author name if `authors` list is empty. |
 | `author_email` | `string` | Fallback author email if `authors` list is empty. |
 
-### Example Multi-Author Config
+### Example Config (V2)
 ```json
 {
+  "repo_path": ".",
   "duration": "7d",
-  "start_date": "2024-01-01",
+  "total_commits": 20,
+  "mode": "even",
   "authors": [
-    { "name": "Alice Developer", "email": "alice@company.com", "weight": 0.7 },
+    { "name": "Alice Dev", "email": "alice@company.com", "weight": 0.7 },
     { "name": "Bob Reviewer", "email": "bob@company.com", "weight": 0.3 }
   ],
-  "file_patterns": ["src/**/*.ts", "package.json"]
+  "file_patterns": ["src/**/*.py", "docs/*.md"]
 }
 ```
 
 ---
 
-## 📂 Internal Safety & Reliability
+## 📂 Safety Filters (Safe-Scan)
 
-When you run `apply`, GitShuffler creates internal metadata to ensure stability:
+GitShuffler includes a robust filtering engine that prevents accidents:
 
-- **`.gitshuffler_state.json`**: Tracks the current progress and manifest hash. **Do not modify** if you intend to resume an interrupted run.
-- **`.gitshuffler.lock`**: A PID file that prevents multiple instances from corrupting the same repository concurrently.
-- **Pre-flight Check**: The tool validates repository cleanliness and ensures you aren't in a detached HEAD state (unless warned).
+- **Strict Excludes**: The tool will **never** enter or scan `node_modules`, `.git`, `dist`, `build`, `.next`, `vendor`, or `__pycache__` regardless of your file patterns.
+- **Symlink Protection**: If a file or directory is a symbolic link, it is skipped. This prevents Git from failing with "pathspec beyond a symbolic link" errors.
+- **PID Locking**: A `.gitshuffler.lock` file prevents multiple instances from running on the same repository concurrently.
+- **Resume Integrity**: Checks the current repository `HEAD` hash to ensure you haven't manually modified history between resumes.
 
 ---
 

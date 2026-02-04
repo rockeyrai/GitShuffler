@@ -2,9 +2,8 @@
     "repo_path": ".",
     "author_name": "Ghost Writer",
     "author_email": "ghost@example.com",
-    "days_active": 7,
-    "commits_per_day_min": 1,
-    "commits_per_day_max": 5,
-    "start_date": "2023-01-01",
+    "duration": "7d",
+    "total_commits": 14,
+    "mode": "even",
     "file_patterns": ["**/*.py", "**/*.md", "**/*.txt"]
 }
