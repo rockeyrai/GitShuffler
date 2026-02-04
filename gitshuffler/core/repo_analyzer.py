@@ -1,10 +1,13 @@
 from typing import List
 from gitshuffler.utils.config_parser import ConfigDTO
+import math
 
 class RepoAnalyzer:
     # Heuristics
-    MAX_COMMITS_PER_MINUTE = 2  # Humans unlikely to commit more than 2x minute sustained
-    FILES_PER_COMMIT_AVG_LOWER_BOUND = 1 # We can have 1 file per commit
+    # We allow up to 10 commits per minute to handle bursts or small demos.
+    # Higher than that might be spammy or unrealistic for "natural" history.
+    MAX_COMMITS_PER_MINUTE = 10  
+    FILES_PER_COMMIT_AVG_LOWER_BOUND = 1 
     
     @staticmethod
     def analyze(files: List[str], config: ConfigDTO):
@@ -14,46 +17,35 @@ class RepoAnalyzer:
         """
         file_count = len(files)
         if file_count == 0:
-            return # Nothing to do, planner will return empty
+            return 
             
         duration_sec = config.duration_seconds
         
-        # Estimate target commits based on density config
-        # This is rough because Planner uses random logic, but we can bound it.
-        # Max commits possible?
-        
-        # If duration < 24h, Planner uses min/max as total range.
-        # If duration >= 24h, Planner uses min/max as per-day range.
-        
-        expected_commits = 0
-        if duration_sec < 86400:
-             expected_commits = config.commits_per_day_max # worst case
+        # Estimate expected commits
+        if config.total_commits:
+             expected_commits = config.total_commits
         else:
-             days = duration_sec / 86400
-             expected_commits = int(days * config.commits_per_day_max)
-             
+             # Heuristic: If explicit total not provided, we assume roughly 1 commit per 5 files.
+             # This is just for density checking. Planner might decide otherwise if logic differs.
+             # We should align this heuristic with Planner's default.
+             expected_commits = max(1, file_count // 5)
+
         # Check 1: Commit Density
-        # If we expect X commits in Y seconds.
         if duration_sec > 0:
              commits_per_minute = expected_commits / (duration_sec / 60)
+             
              if commits_per_minute > RepoAnalyzer.MAX_COMMITS_PER_MINUTE:
-                 min_duration = expected_commits * (60 / RepoAnalyzer.MAX_COMMITS_PER_MINUTE)
-                 # Format duration friendly
-                 hint = f"{int(min_duration)}s" if min_duration < 60 else f"{int(min_duration/60)}m"
-                 
-                 raise ValueError(
-                     f"Requested schedule is too aggressive. "
-                     f"Planning up to {expected_commits} commits in {duration_sec}s ({commits_per_minute:.1f} cpm) "
-                     f"is unrealistic for human activity. Increase duration to at least {hint}."
-                 )
+                  min_seconds = expected_commits * (60 / RepoAnalyzer.MAX_COMMITS_PER_MINUTE)
+                  hint_m = math.ceil(min_seconds / 60)
+                  
+                  raise ValueError(
+                      f"Requested schedule is too aggressive ({commits_per_minute:.1f} commits/min). "
+                      f"Planning {expected_commits} commits in {int(duration_sec)}s. "
+                      f"Please increase duration to at least {hint_m}m "
+                      f"or reduce the number of commits."
+                  )
 
-        # Check 2: Repo Size vs Time
-        # If we have 100,000 files, and user asks for 2h...
-        # Chunker splits files across commits.
-        # If commits = 10, files = 100,000 -> 10,000 files/commit.
-        # Git add 10,000 files takes time.
-        # We enforced batching in GitWrapper, so it won't crash.
-        # But is it "valid"? Yes.
-        # Just a warning maybe?
+        # Check 2: Repo Size vs Time (Warning)
+        # If processing > 10k files in < 10 mins, might be heavy.
         if file_count > 10000 and duration_sec < 600:
              print("Warning: Processing a large number of files in a short duration may cause system stress.")
