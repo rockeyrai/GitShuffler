@@ -82,19 +82,20 @@ class Engine:
         for i, action in enumerate(manifest):
             print(f"[{i+1}/{len(manifest)}] {action.timestamp} - {len(action.files)} files")
             
-            if dry_run:
-                # Just simulate
-                continue
-
             # 1. Add files
-            self.git.add(action.files)
+            if not dry_run:
+                self.git.add(action.files)
+            else:
+                 print(f"[Dry Run] git add {' '.join(action.files)}")
             
             # 2. Commit
+            # Now we delegate dry-run output to the wrapper for exact env var visualization
             self.git.commit(
                 message=action.message,
                 author_name=action.author_name,
                 author_email=action.author_email,
-                timestamp=action.timestamp
+                timestamp=action.timestamp,
+                dry_run=dry_run
             )
             
         print("Done.")

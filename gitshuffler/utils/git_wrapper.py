@@ -38,9 +38,10 @@ class GitWrapper:
             return
         self.run_command(["add"] + files)
 
-    def commit(self, message: str, author_name: str, author_email: str, timestamp: datetime):
+    def commit(self, message: str, author_name: str, author_email: str, timestamp: datetime, dry_run: bool = False):
         """
         Commits staged changes with specific author and timestamp.
+        If dry_run is True, prints the command and environment variables instead of executing.
         """
         # Format timestamp for GIT_AUTHOR_DATE and GIT_COMMITTER_DATE
         # Format: "YYYY-MM-DD HH:MM:SS" or ISO 8601
@@ -54,6 +55,12 @@ class GitWrapper:
             "GIT_COMMITTER_EMAIL": author_email,
             "GIT_COMMITTER_DATE": date_str,
         }
+
+        if dry_run:
+            env_str = " ".join([f'{k}="{v}"' for k, v in env.items()])
+            print(f"[Dry Run] Env: {env_str}")
+            print(f"[Dry Run] Cmd: git commit -m \"{message}\"")
+            return
 
         self.run_command(["commit", "-m", message], env=env)
 

@@ -88,10 +88,17 @@ class Planner:
                 msg = f"Update {len(request_files)} files\n\n- " + "\n- ".join(request_files[:5])
                 if len(request_files) > 5:
                     msg += f"\n...and {len(request_files)-5} more."
+                
+                # Select author based on weights
+                # self.config.authors is guaranteed to be populated by ConfigParser (even if single author)
+                authors_list = self.config.authors
+                weights = [a.weight for a in authors_list]
+                
+                chosen_author = random.choices(authors_list, weights=weights, k=1)[0]
 
                 action = CommitAction(
-                    author_name=self.config.author_name,
-                    author_email=self.config.author_email,
+                    author_name=chosen_author.name,
+                    author_email=chosen_author.email,
                     timestamp=timestamp,
                     files=request_files,
                     message=msg

@@ -44,8 +44,22 @@ def do_init():
     
     default_config = {
         "repo_path": ".",
-        "author_name": "Ghost Writer",
-        "author_email": "ghost@example.com",
+        "authors": [
+            {
+                "name": "Alice",
+                "email": "alice@example.com",
+                "weight": 0.5
+            },
+            {
+                "name": "Bob",
+                "email": "bob@example.com",
+                "weight": 0.5
+            }
+        ],
+        "default_author": {
+            "name": "Ghost Writer",
+            "email": "ghost@example.com"
+        },
         "days_active": 7,
         "commits_per_day_min": 1,
         "commits_per_day_max": 5,
