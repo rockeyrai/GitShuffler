@@ -33,13 +33,40 @@ class GitWrapper:
         self.run_command(["init"])
 
     def add(self, files: List[str]):
-        """Adds specific files to the staging area. Batches commands to avoid CLI limit."""
+        """
+        Adds specific files to the staging area. Batches commands to avoid CLI limit.
+        Checks for file existence to prevent crashes if files are deleted mid-execution.
+        """
         if not files:
             return
         
+        # Filter existing files
+        valid_files = []
+        missing_count = 0
+        
+        # When running add, we must address files relative to repo_path
+        # The input `files` are likely relative paths from repo root (as returned by scan_files).
+        # Wrapper methods usually run in repo_path via CWD=repo_path in run_command.
+        # So we should check existence relative to repo_path.
+        
+        for f in files:
+            full_path = os.path.join(self.repo_path, f)
+            if os.path.exists(full_path):
+                valid_files.append(f)
+            else:
+                missing_count += 1
+                if missing_count <= 5: 
+                    print(f"Warning: File '{f}' missing, skipping.")
+        
+        if missing_count > 5:
+            print(f"Warning: {missing_count} files missing in total. Skipping them.")
+
+        if not valid_files:
+            return
+
         BATCH_SIZE = 1000
-        for i in range(0, len(files), BATCH_SIZE):
-            batch = files[i:i + BATCH_SIZE]
+        for i in range(0, len(valid_files), BATCH_SIZE):
+            batch = valid_files[i:i + BATCH_SIZE]
             self.run_command(["add"] + batch)
 
     def commit(self, message: str, author_name: str, author_email: str, timestamp: datetime, dry_run: bool = False):

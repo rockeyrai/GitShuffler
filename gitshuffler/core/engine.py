@@ -102,50 +102,78 @@ class Engine:
                      print("Warning: You are in 'detached HEAD' state. Commits will not belong to any branch.")
                      # We can choose to abort or just warn. Let's warn for now.
 
-        from gitshuffler.core.state_manager import StateManager
-        state_path = os.path.join(self.config.repo_path, ".gitshuffler_state.json")
-        state_manager = StateManager(state_path)
-
-        # Resume logic
-        try:
-             start_index = state_manager.initialize_or_resume(manifest)
-        except RuntimeError as e:
-             # Hash mismatch
-             print(f"Error: {e}")
-             return
-
-        if start_index >= len(manifest):
-             print("Plan already completed according to state.")
-             return
-
-        print(f"Applying {len(manifest) - start_index} (total {len(manifest)}) commits...")
+        # Concurrency Lock
+        lock_file = os.path.join(self.config.repo_path, ".gitshuffler.lock")
+        if os.path.exists(lock_file):
+            try:
+                with open(lock_file, 'r') as f:
+                    old_pid = int(f.read().strip())
+                
+                # Check if process is alive
+                try:
+                    os.kill(old_pid, 0) # Signal 0 checks existence
+                    print(f"Error: GitShuffler is already running (PID {old_pid}). Aborting.")
+                    return
+                except OSError:
+                    print(f"Warning: Found stale lock file from PID {old_pid}. Overwriting.")
+            except (ValueError, OSError):
+                print("Warning: Found corrupt lock file. Overwriting.")
         
-        for i in range(start_index, len(manifest)):
-            action = manifest[i]
-            print(f"[{i+1}/{len(manifest)}] {action.timestamp} - {len(action.files)} files")
+        # Acquire lock
+        try:
+            with open(lock_file, 'w') as f:
+                f.write(str(os.getpid()))
             
-            # 1. Add files
-            if not dry_run:
-                self.git.add(action.files)
-            else:
-                 # In dry run, we simulate add but don't output 1000 lines
-                 if len(action.files) > 10:
-                      print(f"[Dry Run] git add {len(action.files)} files (output truncated)")
-                 else:
-                      print(f"[Dry Run] git add {' '.join(action.files)}")
+            from gitshuffler.core.state_manager import StateManager
+            state_path = os.path.join(self.config.repo_path, ".gitshuffler_state.json")
+            state_manager = StateManager(state_path)
+
+            # Resume logic
+            try:
+                 start_index = state_manager.initialize_or_resume(manifest)
+            except RuntimeError as e:
+                 # Hash mismatch
+                 print(f"Error: {e}")
+                 return
+
+            if start_index >= len(manifest):
+                 print("Plan already completed according to state.")
+                 return
+
+            print(f"Applying {len(manifest) - start_index} (total {len(manifest)}) commits...")
             
-            # 2. Commit
-            # Now we delegate dry-run output to the wrapper for exact env var visualization
-            self.git.commit(
-                message=action.message,
-                author_name=action.author_name,
-                author_email=action.author_email,
-                timestamp=action.timestamp,
-                dry_run=dry_run
-            )
-            
-            # 3. Update State (only if real execution)
-            if not dry_run:
-                 state_manager.update_progress(i, is_complete=(i == len(manifest) - 1))
-            
-        print("Done.")
+            for i in range(start_index, len(manifest)):
+                action = manifest[i]
+                print(f"[{i+1}/{len(manifest)}] {action.timestamp} - {len(action.files)} files")
+                
+                # 1. Add files
+                if not dry_run:
+                    self.git.add(action.files)
+                else:
+                     # In dry run, we simulate add but don't output 1000 lines
+                     if len(action.files) > 10:
+                          print(f"[Dry Run] git add {len(action.files)} files (output truncated)")
+                     else:
+                          print(f"[Dry Run] git add {' '.join(action.files)}")
+                
+                # 2. Commit
+                # Now we delegate dry-run output to the wrapper for exact env var visualization
+                self.git.commit(
+                    message=action.message,
+                    author_name=action.author_name,
+                    author_email=action.author_email,
+                    timestamp=action.timestamp,
+                    dry_run=dry_run
+                )
+                
+                # 3. Update State (only if real execution)
+                if not dry_run:
+                     state_manager.update_progress(i, is_complete=(i == len(manifest) - 1))
+                
+            print("Done.")
+
+        finally:
+            if os.path.exists(lock_file):
+                # Clean up lock only if it is OURS (though single threaded assumption holds)
+                # To be strict we could check content, but reasonably safe.
+                os.remove(lock_file)

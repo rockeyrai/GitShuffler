@@ -61,9 +61,22 @@ class StateManager:
             return None
 
     def save_state(self, state: ExecutionState):
-        """Saves the execution state to disk."""
-        with open(self.state_file, 'w') as f:
-            json.dump(asdict(state), f, indent=2)
+        """
+        Saves the execution state to disk atomically.
+        Writes to a tmp file first, then renames it to ensure no partial writes.
+        """
+        tmp_file = self.state_file + ".tmp"
+        try:
+            with open(tmp_file, 'w') as f:
+                json.dump(asdict(state), f, indent=2)
+                f.flush()
+                os.fsync(f.fileno()) # Ensure data is on disk
+            
+            os.replace(tmp_file, self.state_file)
+        except OSError as e:
+            print(f"Warning: Failed to save state atomically: {e}")
+            if os.path.exists(tmp_file):
+                os.remove(tmp_file)
 
     def get_saved_manifest(self) -> Optional[List[CommitAction]]:
         """Returns the manifest from the saved state if available."""
