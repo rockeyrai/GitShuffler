@@ -1,9 +1,0 @@
-{
-    "repo_path": ".",
-    "author_name": "Ghost Writer",
-    "author_email": "ghost@example.com",
-    "duration": "7d",
-    "total_commits": 14,
-    "mode": "even",
-    "file_patterns": ["**/*.py", "**/*.md", "**/*.txt"]
-}
