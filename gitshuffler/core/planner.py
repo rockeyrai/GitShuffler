@@ -19,122 +19,87 @@ class Planner:
 
     def plan(self, file_list: List[str]) -> List[CommitAction]:
         """
-        Generates a list of CommitActions based on the config and file list.
+        Generates a list of CommitActions based on the V2 config and file list.
+        Scheduling is relative to NOW.
         """
         if not file_list:
             return []
 
-        start_dt = datetime.fromisoformat(self.config.start_date)
+        # 1. Determine Start Time (NOW)
+        start_dt = datetime.now()
         duration_sec = self.config.duration_seconds
         
-        # Decide mode: Session (< 24h) or Long-Term (>= 24h)
-        # Note: self.config.days_active is now derived/fallback, rely on duration_sec
+        # 2. Determine Number of Commits
+        if self.config.total_commits:
+            num_commits = self.config.total_commits
+        else:
+            # Auto-calculate: Default to 1 commit per 5 files
+            # But ensure at least 1 commit if files exist
+            # And cap density? (RepoAnalyzer already checked safety)
+            density = 5
+            num_commits = max(1, len(file_list) // density)
+            
+            # If we have huge files but small duration, num_commits might be too high
+            # RepoAnalyzer warned about this.
+            # Let's trust the logic max(1, ...)
+            
+        if num_commits == 0:
+            return []
+
+        # 3. Chunk Files
+        file_chunks = Chunker.chunk_files(file_list, num_commits)
+        # Recalculate actual commits based on chunks (it might handle remainders)
+        total_commits_final = len(file_chunks)
         
+        # 4. Generate Timestamps
+        timestamps = []
+        if self.config.mode == "random":
+             # Random distribution within duration
+             for _ in range(total_commits_final):
+                 offset = random.uniform(0, duration_sec)
+                 timestamps.append(start_dt + timedelta(seconds=offset))
+             timestamps.sort()
+        else:
+             # Even distribution (Default)
+             # interval = duration / count
+             # To act nicely, we spread them from T=0 to T=duration
+             if total_commits_final == 1:
+                  # If only 1 commit, put it likely at T=0 or T=mid?
+                  # T=0 implies immediate. Let's do T=0.
+                  timestamps.append(start_dt)
+             else:
+                  step = duration_sec / (total_commits_final - 1) if duration_sec > 0 else 0
+                  for i in range(total_commits_final):
+                       offset = i * step
+                       timestamps.append(start_dt + timedelta(seconds=offset))
+
         manifest: List[CommitAction] = []
         
-        if duration_sec < 86400:
-            # --- SESSION MODE ---
-            # Treat as a single continuous session.
-            # Total commits? derived from commits_per_day density or just min/max?
-            # If I want "2h" session with "5 commits/day" density, that's small.
-            # But usually "2h" implies I want to simulate a burst.
-            # Let's interpret min/max as "commits per session" if < 24h?
-            # Or better, just ensure we have enough commits to cover the files loosely?
-            # Current Chunker requires 'total_commits_needed'.
-            
-            # Heuristic: For short sessions, strictly follow min/max as "per session" range
-            # UNLESS min/max are clearly "per day" scales (like 1-5).
-            # If user sets "2h", and "1-5 commits", we probably mean 1-5 commits in that 2h.
-            
-            num_commits = random.randint(
-                self.config.commits_per_day_min,
-                self.config.commits_per_day_max
-            )
-            
-            if num_commits == 0:
-                return []
-                
-            # Chunk files
-            file_chunks = Chunker.chunk_files(file_list, num_commits)
-            total_commits_final = len(file_chunks)
-            
-            # Distribute timestamps in [start, start + duration]
-            # We want them sorted.
-            timestamps = []
-            for _ in range(total_commits_final):
-                offset = random.randint(0, int(duration_sec))
-                timestamps.append(start_dt + timedelta(seconds=offset))
-            timestamps.sort()
-            
-            # Assign
-            for i in range(total_commits_final):
-                ts = timestamps[i]
-                request_files = file_chunks[i]
-                self._add_action(manifest, request_files, ts)
-
-        else:
-            # --- LONG TERM MODE ---
-            # Iterate days as before
-            total_days = int(duration_sec // 86400)
-            remaining_sec = duration_sec % 86400
-            if remaining_sec > 0:
-                total_days += 1
-            
-            daily_plans = []
-            total_commits_needed = 0
-            
-            for day_offset in range(total_days):
-                current_date = start_dt + timedelta(days=day_offset)
-                
-                num_commits = random.randint(
-                    self.config.commits_per_day_min,
-                    self.config.commits_per_day_max
-                )
-                
-                if num_commits > 0:
-                    daily_plans.append({
-                        "date": current_date,
-                        "num_commits": num_commits
-                    })
-                    total_commits_needed += num_commits
-            
-            if total_commits_needed == 0:
-                return []
-
-            file_chunks = Chunker.chunk_files(file_list, total_commits_needed)
-            actual_chunks_count = len(file_chunks)
-            
-            chunk_idx = 0
-            for plan in daily_plans:
-                date_base = plan["date"]
-                commits_today = plan["num_commits"]
-                
-                for _ in range(commits_today):
-                    if chunk_idx >= actual_chunks_count:
-                        break
-                    
-                    request_files = file_chunks[chunk_idx]
-                    chunk_idx += 1
-                    
-                    # Random time between 9 AM and 6 PM
-                    hour = random.randint(9, 17)
-                    minute = random.randint(0, 59)
-                    second = random.randint(0, 59)
-                    
-                    timestamp = date_base.replace(hour=hour, minute=minute, second=second)
-                    self._add_action(manifest, request_files, timestamp)
+        # 5. Assign Actions
+        for i in range(total_commits_final):
+            ts = timestamps[i]
+            request_files = file_chunks[i]
+            self._add_action(manifest, request_files, ts)
 
         return manifest
 
     def _add_action(self, manifest: List[CommitAction], request_files: List[str], timestamp: datetime):
         # Helper to create action
-        msg = f"Update {len(request_files)} files\n\n- " + "\n- ".join(request_files[:5])
-        if len(request_files) > 5:
-            msg += f"\n...and {len(request_files)-5} more."
+        msg = f"Update {len(request_files)} files"
+        # Add basic summary
+        if request_files:
+             msg += f"\n\n- " + "\n- ".join(request_files[:5])
+             if len(request_files) > 5:
+                 msg += f"\n...and {len(request_files)-5} more."
         
+        # Helper to pick author
         authors_list = self.config.authors
-        weights = [a.weight for a in authors_list]
-        chosen_author = random.choices(authors_list, weights=weights, k=1)[0]
+        chosen_author = authors_list[0] # Default
+        
+        if len(authors_list) > 1:
+             weights = [a.weight for a in authors_list]
+             # random.choices returns a list [k]
+             chosen_author = random.choices(authors_list, weights=weights, k=1)[0]
 
         action = CommitAction(
             author_name=chosen_author.name,
