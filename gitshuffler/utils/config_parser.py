@@ -24,6 +24,9 @@ class ConfigDTO:
     
     # New multi-author fields
     authors: List[AuthorDTO]
+    
+    # New Time Model
+    duration_seconds: float = 0.0 # Calculated from days_active or duration string
 
 class ConfigParser:
     @staticmethod
@@ -42,8 +45,10 @@ class ConfigParser:
             raise ValueError(f"Invalid JSON in configuration file: {e}")
 
         # Required fields for backward compatibility
+        # We now accept EITHER days_active OR duration (or both, duration wins)
+        # But for strictly required, we check existence specially below.
         required_fields = [
-            "repo_path", "days_active", 
+            "repo_path", 
             "commits_per_day_min", "commits_per_day_max",
             "start_date", "file_patterns"
         ]
@@ -52,10 +57,36 @@ class ConfigParser:
             if field not in data:
                 raise ValueError(f"Missing required field in config: {field}")
 
-        # Handle Author Configuration
-        # If "authors" is present, validate it.
-        # If not, ensure "author_name" and "author_email" exist.
+        # Time Configuration Logic
+        from gitshuffler.utils.time_utils import TimeUtils
         
+        duration_seconds = 0.0
+        
+        if "duration" in data:
+             try:
+                 td = TimeUtils.parse_duration(data["duration"])
+                 duration_seconds = td.total_seconds()
+             except ValueError as e:
+                 raise ValueError(f"Invalid 'duration' in config: {e}")
+        elif "days_active" in data:
+             if data["days_active"] < 1:
+                 raise ValueError("days_active must be at least 1")
+             # Convert days to seconds: days * 24 * 3600
+             # Note: The old Planner simulated 9am-6pm. We should respect that implicit expectation 
+             # if using days? Or just treat it as raw time?
+             # To be safe and precise: days_active usually meant "Total span in days".
+             # Let's convert to seconds directly.
+             duration_seconds = data["days_active"] * 86400
+        else:
+             raise ValueError("Must provide either 'duration' or 'days_active' in config.")
+
+        # Basic Validation
+        if data["commits_per_day_min"] < 0:
+            raise ValueError("commits_per_day_min must be non-negative")
+        if data["commits_per_day_max"] < data["commits_per_day_min"]:
+            raise ValueError("commits_per_day_max must be greater than or equal to commits_per_day_min")
+
+        # Handle Author Configuration
         authors: List[AuthorDTO] = []
         default_author_name = data.get("author_name")
         default_author_email = data.get("author_email")
@@ -70,42 +101,30 @@ class ConfigParser:
                 total_weight += weight
                 authors.append(AuthorDTO(name=a["name"], email=a["email"], weight=weight))
             
-            # Validate weights strictly if provided
-            # If weights are all 0, we might auto-distribute? The prompt says "Validate weights sum to 1.0"
             if not (0.99 <= total_weight <= 1.01):
                  raise ValueError(f"Author weights must sum to 1.0 (got {total_weight})")
         
         else:
-            # Fallback to single author
             if not default_author_name or not default_author_email:
-                # If neither list nor single vals exist
                 if "default_author" in data:
                     default = data["default_author"]
                     default_author_name = default.get("name")
                     default_author_email = default.get("email")
 
             if not default_author_name or not default_author_email:
-                 raise ValueError("Must provide either 'authors' list or 'author_name'/'author_email' (or 'default_author')")
+                 raise ValueError("Must provide either 'authors' list or 'author_name'/'author_email'")
             
-            # Construct a single author with weight 1.0 for the Planner to use uniformly
             authors.append(AuthorDTO(name=default_author_name, email=default_author_email, weight=1.0))
-
-        # Basic Validation
-        if data["days_active"] < 1:
-            raise ValueError("days_active must be at least 1")
-        if data["commits_per_day_min"] < 0:
-            raise ValueError("commits_per_day_min must be non-negative")
-        if data["commits_per_day_max"] < data["commits_per_day_min"]:
-            raise ValueError("commits_per_day_max must be greater than or equal to commits_per_day_min")
 
         return ConfigDTO(
             repo_path=data["repo_path"],
             author_name=default_author_name if default_author_name else authors[0].name,
             author_email=default_author_email if default_author_email else authors[0].email,
-            days_active=data["days_active"],
+            days_active=data.get("days_active", int(duration_seconds // 86400)), # fallback for legacy read
             commits_per_day_min=data["commits_per_day_min"],
             commits_per_day_max=data["commits_per_day_max"],
             start_date=data["start_date"],
             file_patterns=data.get("file_patterns", []),
-            authors=authors
+            authors=authors,
+            duration_seconds=duration_seconds
         )

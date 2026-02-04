@@ -25,84 +25,122 @@ class Planner:
             return []
 
         start_dt = datetime.fromisoformat(self.config.start_date)
-        total_days = self.config.days_active
+        duration_sec = self.config.duration_seconds
         
-        # 1. Determine total number of commits needed
-        # We simulate day by day.
+        # Decide mode: Session (< 24h) or Long-Term (>= 24h)
+        # Note: self.config.days_active is now derived/fallback, rely on duration_sec
         
-        daily_plans = []
-        total_commits_needed = 0
-
-        for day_offset in range(total_days):
-            current_date = start_dt + timedelta(days=day_offset)
+        manifest: List[CommitAction] = []
+        
+        if duration_sec < 86400:
+            # --- SESSION MODE ---
+            # Treat as a single continuous session.
+            # Total commits? derived from commits_per_day density or just min/max?
+            # If I want "2h" session with "5 commits/day" density, that's small.
+            # But usually "2h" implies I want to simulate a burst.
+            # Let's interpret min/max as "commits per session" if < 24h?
+            # Or better, just ensure we have enough commits to cover the files loosely?
+            # Current Chunker requires 'total_commits_needed'.
             
-            # Randomly decide how many commits for this day
+            # Heuristic: For short sessions, strictly follow min/max as "per session" range
+            # UNLESS min/max are clearly "per day" scales (like 1-5).
+            # If user sets "2h", and "1-5 commits", we probably mean 1-5 commits in that 2h.
+            
             num_commits = random.randint(
                 self.config.commits_per_day_min,
                 self.config.commits_per_day_max
             )
             
-            if num_commits > 0:
-                daily_plans.append({
-                    "date": current_date,
-                    "num_commits": num_commits
-                })
-                total_commits_needed += num_commits
-
-        # If zero commits planned (unlikely due to min/max, but possible if min=0), return empty
-        if total_commits_needed == 0:
-            return []
-
-        # 2. Chunk the files
-        file_chunks = Chunker.chunk_files(file_list, total_commits_needed)
-        
-        # It's possible Chunker returned fewer chunks than requested if num_files < total_commits_needed
-        # We need to adjust our plan to match the actual number of chunks available.
-        actual_chunks_count = len(file_chunks)
-        
-        manifest: List[CommitAction] = []
-        chunk_idx = 0
-
-        for plan in daily_plans:
-            date_base = plan["date"]
-            # working hours 9am - 6pm roughly
-            # spread commits out
+            if num_commits == 0:
+                return []
+                
+            # Chunk files
+            file_chunks = Chunker.chunk_files(file_list, num_commits)
+            total_commits_final = len(file_chunks)
             
-            commits_today = plan["num_commits"]
+            # Distribute timestamps in [start, start + duration]
+            # We want them sorted.
+            timestamps = []
+            for _ in range(total_commits_final):
+                offset = random.randint(0, int(duration_sec))
+                timestamps.append(start_dt + timedelta(seconds=offset))
+            timestamps.sort()
             
-            for _ in range(commits_today):
-                if chunk_idx >= actual_chunks_count:
-                    break
-                
-                request_files = file_chunks[chunk_idx]
-                chunk_idx += 1
+            # Assign
+            for i in range(total_commits_final):
+                ts = timestamps[i]
+                request_files = file_chunks[i]
+                self._add_action(manifest, request_files, ts)
 
-                # Random time between 9 AM and 6 PM
-                hour = random.randint(9, 17)
-                minute = random.randint(0, 59)
-                second = random.randint(0, 59)
+        else:
+            # --- LONG TERM MODE ---
+            # Iterate days as before
+            total_days = int(duration_sec // 86400)
+            remaining_sec = duration_sec % 86400
+            if remaining_sec > 0:
+                total_days += 1
+            
+            daily_plans = []
+            total_commits_needed = 0
+            
+            for day_offset in range(total_days):
+                current_date = start_dt + timedelta(days=day_offset)
                 
-                timestamp = date_base.replace(hour=hour, minute=minute, second=second)
-                
-                # Simple message generation
-                msg = f"Update {len(request_files)} files\n\n- " + "\n- ".join(request_files[:5])
-                if len(request_files) > 5:
-                    msg += f"\n...and {len(request_files)-5} more."
-                
-                # Select author based on weights
-                # self.config.authors is guaranteed to be populated by ConfigParser (even if single author)
-                authors_list = self.config.authors
-                weights = [a.weight for a in authors_list]
-                
-                chosen_author = random.choices(authors_list, weights=weights, k=1)[0]
-
-                action = CommitAction(
-                    author_name=chosen_author.name,
-                    author_email=chosen_author.email,
-                    timestamp=timestamp,
-                    files=request_files,
-                    message=msg
+                num_commits = random.randint(
+                    self.config.commits_per_day_min,
+                    self.config.commits_per_day_max
                 )
-                manifest.append(action)
+                
+                if num_commits > 0:
+                    daily_plans.append({
+                        "date": current_date,
+                        "num_commits": num_commits
+                    })
+                    total_commits_needed += num_commits
+            
+            if total_commits_needed == 0:
+                return []
+
+            file_chunks = Chunker.chunk_files(file_list, total_commits_needed)
+            actual_chunks_count = len(file_chunks)
+            
+            chunk_idx = 0
+            for plan in daily_plans:
+                date_base = plan["date"]
+                commits_today = plan["num_commits"]
+                
+                for _ in range(commits_today):
+                    if chunk_idx >= actual_chunks_count:
+                        break
+                    
+                    request_files = file_chunks[chunk_idx]
+                    chunk_idx += 1
+                    
+                    # Random time between 9 AM and 6 PM
+                    hour = random.randint(9, 17)
+                    minute = random.randint(0, 59)
+                    second = random.randint(0, 59)
+                    
+                    timestamp = date_base.replace(hour=hour, minute=minute, second=second)
+                    self._add_action(manifest, request_files, timestamp)
 
         return manifest
+
+    def _add_action(self, manifest: List[CommitAction], request_files: List[str], timestamp: datetime):
+        # Helper to create action
+        msg = f"Update {len(request_files)} files\n\n- " + "\n- ".join(request_files[:5])
+        if len(request_files) > 5:
+            msg += f"\n...and {len(request_files)-5} more."
+        
+        authors_list = self.config.authors
+        weights = [a.weight for a in authors_list]
+        chosen_author = random.choices(authors_list, weights=weights, k=1)[0]
+
+        action = CommitAction(
+            author_name=chosen_author.name,
+            author_email=chosen_author.email,
+            timestamp=timestamp,
+            files=request_files,
+            message=msg
+        )
+        manifest.append(action)

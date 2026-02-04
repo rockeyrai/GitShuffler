@@ -48,7 +48,24 @@ class Engine:
         Runs the planning phase.
         """
         self.load_config()
+        
+        # Check for existing state to resume
+        from gitshuffler.core.state_manager import StateManager
+        state_path = os.path.join(self.config.repo_path, ".gitshuffler_state.json")
+        state_manager = StateManager(state_path)
+        saved_manifest = state_manager.get_saved_manifest()
+        
+        # We only auto-resume if the state says we are incomplete
+        state = state_manager.load_state()
+        if saved_manifest and state and not state.is_complete:
+             print(f"Detected interrupted execution. Resuming plan with {len(saved_manifest)} commits.")
+             return saved_manifest
+
         files = self.scan_files()
+        
+        from gitshuffler.core.repo_analyzer import RepoAnalyzer
+        RepoAnalyzer.analyze(files, self.config)
+        
         planner = Planner(self.config)
         return planner.plan(files)
 
@@ -76,17 +93,46 @@ class Engine:
                  self.git.init()
              else:
                  print(f"[Dry Run] would init git repo at {self.config.repo_path}")
+        else:
+             # Safety checks for existing repo
+             if not dry_run:
+                 if not self.git.is_clean():
+                     raise RuntimeError("Repository is not clean. Please commit or stash changes before running.")
+                 if self.git.is_detached():
+                     print("Warning: You are in 'detached HEAD' state. Commits will not belong to any branch.")
+                     # We can choose to abort or just warn. Let's warn for now.
 
-        print(f"Applying {len(manifest)} commits...")
+        from gitshuffler.core.state_manager import StateManager
+        state_path = os.path.join(self.config.repo_path, ".gitshuffler_state.json")
+        state_manager = StateManager(state_path)
+
+        # Resume logic
+        try:
+             start_index = state_manager.initialize_or_resume(manifest)
+        except RuntimeError as e:
+             # Hash mismatch
+             print(f"Error: {e}")
+             return
+
+        if start_index >= len(manifest):
+             print("Plan already completed according to state.")
+             return
+
+        print(f"Applying {len(manifest) - start_index} (total {len(manifest)}) commits...")
         
-        for i, action in enumerate(manifest):
+        for i in range(start_index, len(manifest)):
+            action = manifest[i]
             print(f"[{i+1}/{len(manifest)}] {action.timestamp} - {len(action.files)} files")
             
             # 1. Add files
             if not dry_run:
                 self.git.add(action.files)
             else:
-                 print(f"[Dry Run] git add {' '.join(action.files)}")
+                 # In dry run, we simulate add but don't output 1000 lines
+                 if len(action.files) > 10:
+                      print(f"[Dry Run] git add {len(action.files)} files (output truncated)")
+                 else:
+                      print(f"[Dry Run] git add {' '.join(action.files)}")
             
             # 2. Commit
             # Now we delegate dry-run output to the wrapper for exact env var visualization
@@ -97,5 +143,9 @@ class Engine:
                 timestamp=action.timestamp,
                 dry_run=dry_run
             )
+            
+            # 3. Update State (only if real execution)
+            if not dry_run:
+                 state_manager.update_progress(i, is_complete=(i == len(manifest) - 1))
             
         print("Done.")

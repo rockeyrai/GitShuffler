@@ -33,10 +33,14 @@ class GitWrapper:
         self.run_command(["init"])
 
     def add(self, files: List[str]):
-        """Adds specific files to the staging area."""
+        """Adds specific files to the staging area. Batches commands to avoid CLI limit."""
         if not files:
             return
-        self.run_command(["add"] + files)
+        
+        BATCH_SIZE = 1000
+        for i in range(0, len(files), BATCH_SIZE):
+            batch = files[i:i + BATCH_SIZE]
+            self.run_command(["add"] + batch)
 
     def commit(self, message: str, author_name: str, author_email: str, timestamp: datetime, dry_run: bool = False):
         """
@@ -70,3 +74,35 @@ class GitWrapper:
             self.run_command(["--version"])
         except RuntimeError:
             raise RuntimeError("Git is not installed or not found in PATH.")
+
+    def is_clean(self) -> bool:
+        """
+        Returns True if the working directory is clean (no uncommitted changes).
+        Ignores untracked files (??) as those are likely the target of the shuffle.
+        """
+        output = self.run_command(["status", "--porcelain"])
+        if not output:
+            return True
+        
+        for line in output.splitlines():
+            # Check for non-untracked changes
+            # Porcelain format: XY Path
+            # ?? = Untracked
+            if not line.strip().startswith("??"):
+                return False
+        return True
+
+    def current_branch(self) -> str:
+        """Returns the current branch name. Returns 'HEAD' if detached or unable to determine."""
+        try:
+            return self.run_command(["symbolic-ref", "--short", "HEAD"])
+        except RuntimeError:
+            # Fallback for detached HEAD or other issues
+            try:
+                return self.run_command(["rev-parse", "--abbrev-ref", "HEAD"])
+            except RuntimeError:
+                return "HEAD"
+
+    def is_detached(self) -> bool:
+        """Returns True if HEAD is detached."""
+        return self.current_branch() == "HEAD"
