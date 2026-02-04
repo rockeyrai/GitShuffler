@@ -1,84 +1,125 @@
-# GitShuffler
+# 🔀 GitShuffler
 
-GitShuffler is a tool designed to simulate natural Git commit history by planning and executing commits based on a configuration. It helps in creating realistic commit graphs for projects.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-## Installation
+**GitShuffler** is a high-reliability CLI tool designed for developers to simulate and reconstruct natural Git commit history. Whether you are testing local CI/CD pipelines, migrating repositories with complex history requirements, or simulating realistic developer activity in a sandbox environment, GitShuffler provides a deterministic and crash-safe solution.
 
-Since this is a Python package, you can install it in editable mode:
+---
+
+## ⚖️ Ethics, Safety & Policy Disclosure
+
+**GitShuffler is an educational and utility tool for local repository management.** 
+
+- **Compliance**: Users are responsible for ensuring that the use of this tool complies with the Terms of Service of any hosting provider (e.g., GitHub, GitLab, Bitbucket). 
+- **Integrity**: We discourage using this tool to inflate contribution graphs or misrepresent work history on public platforms.
+- **Privacy**: GitShuffler operates entirely locally and does not transmit data to external services.
+- **History Safety**: The tool includes internal safeguards (Idempotency, PID Locking, Atomic Writes) to prevent repository corruption.
+
+---
+
+## 🚀 Key Features
+
+- **🛡️ Crash-Safe Resume**: Interrupted sessions (e.g., system crash, Ctrl+C) can be resumed exactly where they left off using persistent state tracking.
+- **🕒 Human-Readable Scheduling**: Define history spans using natural language like `"2h 30m"` or `"15d"`.
+- **👥 Multi-Author Simulation**: Shuffle commits across multiple developer identities with weighted probability.
+- **⚡ High-Performance Batching**: Efficiently handles repositories with 100,000+ files using batched Git operations.
+- **🔒 Production Hardening**: Feature-set includes Atomic state writes, PID locking, and automated pre-flight safety checks (HEAD integrity, dirty-repo detection).
+
+---
+
+## 🛠️ Installation
 
 ```bash
+# Clone the repository
+git clone https://github.com/rockeyrai/GitShuffler.git
+cd GitShuffler
+
+# Install in editable mode
 pip install -e .
 ```
 
-## Usage
+---
 
-### 1. Initialize Configuration
+## 📖 Usage Guide
 
-First, generate a default configuration file in your target repository:
-
+### 1. Initialize
+Generate a configuration template in your target repository:
 ```bash
 python3 -m gitshuffler.cli init
 ```
 
-This creates `gitshuffler.json`. Edit this file to customize:
-- `repo_path`: Path to the repository you want to shuffle (default is current directory `.`).
-- `author_name` & `author_email`: The identity used for the commits.
-- `days_active`: How many days of history to generate.
-- `start_date`: The date when the commit history should start.
-- `file_patterns`: Glob patterns for files to include in the commit history (e.g., `["**/*.py", "**/*.md"]`).
+### 2. Configure
+Edit the generated `gitshuffler.json`. See the [Configuration Reference](#configuration-reference) below.
 
-### 2. Preview the Plan
-
-Before applying any changes, run the planning phase to see what commits will be generated:
-
+### 3. Plan & Preview
+Generate a deterministic execution plan without modifying history:
 ```bash
 python3 -m gitshuffler.cli plan
 ```
 
-This will output a list of scheduled commits with timestamps and file counts, without making any changes.
-
-### 3. Apply Commits
-
-To execute the plan and create the actual git commits:
-
+### 4. Apply (or Resume)
+Execute the plan. If interrupted, running this again will resume automatically.
 ```bash
 python3 -m gitshuffler.cli apply
-```
 
-**Tip**: You can use the `--dry-run` flag to simulate the execution sequence without writing to the git history:
-
-```bash
+# Simulated dry-run
 python3 -m gitshuffler.cli apply --dry-run
 ```
 
-## How to Test
+---
 
-### Running Unit Tests
+## ⚙️ Configuration Reference
 
-The project includes unit tests for core logic. Run them using:
+The `gitshuffler.json` file is the brain of the operation. Below are the supported fields:
 
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `repo_path` | `string` | Absolute or relative path to the target Git repository. |
+| `start_date` | `string` | The point in time to begin history (Format: `YYYY-MM-DD`). |
+| `duration` | `string` | The length of the history window (e.g., `"2d"`, `"5h"`, `"30m"`). **Supersedes `days_active`.** |
+| `days_active` | `int` | Legacy field for duration in days. |
+| `commits_per_day_min` | `int` | Minimum commits to generate per 24h window. |
+| `commits_per_day_max` | `int` | Maximum commits to generate per 24h window. |
+| `file_patterns` | `list` | Glob patterns to include in shuffling (e.g., `["**/*.py", "docs/*.md"]`). |
+| `authors` | `list` | List of author objects `{"name": "...", "email": "...", "weight": 0.5}`. |
+| `author_name` | `string` | Fallback author name if `authors` list is empty. |
+| `author_email` | `string` | Fallback author email if `authors` list is empty. |
+
+### Example Multi-Author Config
+```json
+{
+  "duration": "7d",
+  "start_date": "2024-01-01",
+  "authors": [
+    { "name": "Alice Developer", "email": "alice@company.com", "weight": 0.7 },
+    { "name": "Bob Reviewer", "email": "bob@company.com", "weight": 0.3 }
+  ],
+  "file_patterns": ["src/**/*.ts", "package.json"]
+}
+```
+
+---
+
+## 📂 Internal Safety & Reliability
+
+When you run `apply`, GitShuffler creates internal metadata to ensure stability:
+
+- **`.gitshuffler_state.json`**: Tracks the current progress and manifest hash. **Do not modify** if you intend to resume an interrupted run.
+- **`.gitshuffler.lock`**: A PID file that prevents multiple instances from corrupting the same repository concurrently.
+- **Pre-flight Check**: The tool validates repository cleanliness and ensures you aren't in a detached HEAD state (unless warned).
+
+---
+
+## 🧪 Testing
+
+We value reliability. To run the test suite:
 ```bash
 python3 -m unittest discover tests
 ```
 
-### Manual Verification (The "Dry Run" Method)
+---
 
-1.  Initialize a new empty folder or use a dummy repo.
-2.  Run `python3 -m gitshuffler.cli init`.
-3.  Add some dummy files matching your patterns (e.g., `touch test1.py test2.py`).
-4.  Run `python3 -m gitshuffler.cli plan`.
-5.  Run `python3 -m gitshuffler.cli apply --dry-run`.
-6.  Check the output to ensure the dates, authors, and file groupings look correct.
+## 📄 License
 
-### Verification in a Real Repo
-
-1.  Make sure your git status is clean.
-2.  Run `python3 -m gitshuffler.cli apply`.
-3.  Use `git log` to see the newly created commit history with backdated timestamps.
-
-## Architecture
-
-- **Planner**: deterministic scheduling of commits.
-- **Chunker**: groups files into commits.
-- **Engine**: orchestrates the process.
-- **GitWrapper**: handles low-level git commands.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
